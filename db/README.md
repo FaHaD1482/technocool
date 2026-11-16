@@ -34,6 +34,49 @@ All seeds can be re-run safely. After loading, set the company details in the ap
 npm run create-admin -- --email you@company.com --name "Your Name"
 ```
 
+## Restoring `db file/hvac_boq.sql`
+
+That file is a full plain-SQL dump of a working database: schema, all 15 migrations, the price lists, real users,
+clients, BOQs, mail and audit history. It is committed so a collaborator can start with real data instead of an
+empty schema.
+
+```bash
+# 1. the dump has no CREATE DATABASE, so make the database first
+createdb -U postgres hvac_boq
+
+# 2. restore (use psql 17 or newer: the dump starts with a \restrict line that older psql rejects)
+psql -U postgres -d hvac_boq -v ON_ERROR_STOP=1 -f "db file/hvac_boq.sql"
+```
+
+Then point `DATABASE_URL` at it in `.env.local` and check:
+
+```bash
+npm run db:setup -- --status    # every migration should already be "applied"
+```
+
+Every migration checksum in the dump matches the files in this folder, so `db:setup` is a no-op rather than a
+"file has CHANGED" error.
+
+Two things that will bite a restore on a different machine:
+
+- **`OWNER TO postgres`** appears 49 times. If your superuser is not literally `postgres`, either restore as the
+  `postgres` role or drop those lines first:
+  `sed '/^OWNER TO/d' "db file/hvac_boq.sql" | psql -U <you> -d hvac_boq`
+- **`\restrict` / `\unrestrict`** come from `pg_dump` 17.6+. On psql 15/16, remove those two lines the same way,
+  or install the matching client.
+
+What a collaborator gets and does not get:
+
+- **Users exist but their passwords are argon2 hashes.** Nobody can sign in as them. Create your own admin:
+  `npm run create-admin -- --email you@company.com --name "Your Name"`.
+- **Google is not connected.** `mail_config` / `mail_accounts` hold tokens encrypted with the owner's
+  `GMAIL_TOKEN_KEY`, which is not in the repository. Admin → Gmail will show "disconnected": connect your own
+  mailbox, or leave it disconnected while working on everything except mail.
+- **`storage/` is not committed** (it is gitignored). BOQ exports can simply be generated again; attachments on
+  older conversations will be listed but not downloadable.
+- **This dump contains real client data.** It belongs in a private repository and should not be shared outside the
+  team or attached to tickets.
+
 ## Migrations
 
 | File | What it adds |

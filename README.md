@@ -21,16 +21,19 @@ argon2id passwords · decimal.js for money (never floating point).
 
 ## First-time setup (Windows, local)
 
-Needs Node.js 20.9+ and PostgreSQL 15+ running locally.
+Needs Node.js 22.12+ and PostgreSQL 15+ running locally.
 
 ```bash
-npm install
+npm install --include=dev         # --include=dev matters if your npm config omits devDependencies
 copy .env.example .env.local      # then edit: DATABASE_URL, DB_ADMIN_URL, GMAIL_TOKEN_KEY (npm run gen-secret)
-npm run db:setup                  # creates the hvac_boq database and runs db/01..04 once each
+npm run db:setup                  # creates the hvac_boq database and applies db/NN_*.sql in order
 npm run create-admin -- --email you@company.com --name "Your Name"
 npm run dev                       # http://localhost:3000
 npm run worker                    # second terminal: sends queued e-mails and reads client replies
 ```
+
+Starting from existing data? Restore `db file/hvac_boq.sql` instead of `db:setup` — see
+[db/README.md](db/README.md#restoring-db-filehvac_boqsql) for the exact commands.
 
 `create-admin` prints a one-time password. Sign in, then change it on **My account**. Add employees on **Users**
 (each gets their own one-time password).
