@@ -1,0 +1,24 @@
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# secrets: never commit
+.env
+.env.local
+.env.*.local
+
+# database dumps hold password hashes and encrypted tokens: never commit, never keep them in the project
+db/*.dump
+db/dump*
+*.dump
+
+# generated Excel files (private)
+storage/
+.test-storage/
+
+# IDE & tooling
+.commandcode/
+

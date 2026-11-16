@@ -1,0 +1,110 @@
+'use client';
+
+import { useActionState, useState, useTransition } from 'react';
+import { Confirm } from '@/components/ui/Confirm';
+import { fmtDateTime } from '@/lib/format';
+import { ROLES, ROLE_CODES, roleLabel } from '@/lib/labels';
+import { addUser, changeRole, resetPassword, setActive, type UserState } from './actions';
+
+export interface UserRow {
+  id: string; email: string; fullName: string; designation: string | null; role: string | null;
+  isActive: boolean; lastLogin: string | null; locked: boolean; boqs: number;
+}
+
+function Secret({ state }: { state: UserState }) {
+  if (!state.error && !state.ok) return null;
+  return (
+    <div className={`alert ${state.error ? 'err' : 'ok'}`} role="status" style={{ flexDirection: 'column' }}>
+      <span>{state.error ?? state.ok}</span>
+      {state.password && <code className="mono" style={{ fontSize: 16, userSelect: 'all' }}>{state.password}</code>}
+    </div>
+  );
+}
+
+export function UsersClient({ users, me, canManage }: { users: UserRow[]; me: string; canManage: boolean }) {
+  const [addState, addAction, adding] = useActionState<UserState, FormData>(addUser, {});
+  const [rowState, setRowState] = useState<UserState>({});
+  const [pending, start] = useTransition();
+  const [ask, setAsk] = useState<{ kind: 'reset' | 'disable'; user: UserRow } | null>(null);
+  const run = (fn: () => Promise<UserState>) => start(async () => setRowState(await fn()));
+
+  /** Confirmed actions close the dialog only when the server agrees. */
+  const confirmed = async (fn: () => Promise<UserState>) => {
+    const state = await fn();
+    setRowState(state);
+    if (!state.error) setAsk(null);
+    return state.error ?? null;
+  };
+
+  return (
+    <div className="stack" style={{ gap: 16 }}>
+      <Secret state={rowState} />
+      <div className="scroller">
+        <table className="list">
+          <thead><tr><th>Name</th><th>Role</th><th>Status</th><th className="n">BOQs</th><th>Last sign-in</th>{canManage && <th className="n">Actions</th>}</tr></thead>
+          <tbody>
+            {users.map((u) => (
+              <tr key={u.id}>
+                <td><b>{u.fullName}</b>{u.id === me && ' (you)'}<span className="sub">{u.email}{u.designation ? ` · ${u.designation}` : ''}</span></td>
+                <td>
+                  {canManage ? (
+                    <select value={u.role ?? ''} disabled={pending} aria-label={`Role of ${u.fullName}`} onChange={(e) => run(() => changeRole(u.id, e.target.value))}>
+                      {!u.role && <option value="">No role</option>}
+                      {ROLE_CODES.map((c) => <option key={c} value={c}>{ROLES[c].label}</option>)}
+                    </select>
+                  ) : roleLabel(u.role)}
+                </td>
+                <td>{!u.isActive ? <span className="chip off">Disabled</span> : u.locked ? <span className="chip rejected">Locked</span> : <span className="chip accepted">Active</span>}</td>
+                <td className="n">{u.boqs}</td>
+                <td>{u.lastLogin ? fmtDateTime(u.lastLogin, 'Never') : 'Never'}</td>
+                {canManage && (
+                  <td className="n" style={{ whiteSpace: 'nowrap' }}>
+                    <button className="btn small" disabled={pending} onClick={() => setAsk({ kind: 'reset', user: u })}>Reset password</button>{' '}
+                    {u.id !== me && (
+                      u.isActive
+                        ? <button className="btn small reset" disabled={pending} onClick={() => setAsk({ kind: 'disable', user: u })}>Disable</button>
+                        : <button className="btn small" disabled={pending} onClick={() => run(() => setActive(u.id, true))}>Enable</button>
+                    )}
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {canManage && (
+        <form action={addAction} className="card stack" style={{ maxWidth: 760 }}>
+          <h2>Add employee</h2>
+          <div className="formgrid">
+            <label className="f"><span className="lbl">Full name</span><input name="fullName" required /></label>
+            <label className="f"><span className="lbl">E-mail <small>their sign-in, and where reply notices go</small></span><input name="email" type="email" required /></label>
+            <label className="f"><span className="lbl">Designation</span><input name="designation" placeholder="e.g. Sales Engineer" /></label>
+            <label className="f"><span className="lbl">Role</span>
+              <select name="role" defaultValue="estimator">
+                {ROLE_CODES.map((c) => <option key={c} value={c}>{ROLES[c].label} · {ROLES[c].hint}</option>)}
+              </select>
+            </label>
+          </div>
+          <Secret state={addState} />
+          <div className="formactions"><button className="btn primary" disabled={adding}>{adding ? 'Creating…' : 'Create account'}</button></div>
+        </form>
+      )}
+
+      {ask?.kind === 'reset' && (
+        <Confirm title={`Reset the password for ${ask.user.fullName}?`} confirmLabel="Reset password"
+          onConfirm={() => confirmed(() => resetPassword(ask.user.id))} onClose={() => setAsk(null)}>
+          A new temporary password is generated and shown once. Their current password stops working immediately.
+        </Confirm>
+      )}
+
+      {ask?.kind === 'disable' && (
+        <Confirm title={`Disable ${ask.user.fullName}?`} confirmLabel="Disable account" danger
+          onConfirm={() => confirmed(() => setActive(ask.user.id, false))} onClose={() => setAsk(null)}>
+          They are signed out and cannot sign in again until you enable the account. Their BOQs, clients and sent
+          mail stay exactly as they are.
+        </Confirm>
+      )}
+    </div>
+  );
+}
