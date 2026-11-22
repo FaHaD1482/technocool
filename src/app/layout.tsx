@@ -28,7 +28,8 @@ const boot = `(function(){try{var d=document.documentElement,t=localStorage.getI
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning className={`${display.variable} ${body.variable}`}>
-      <body>
+      {/* Browser extensions (VPN / security add-ons) stamp attributes on <body> before React loads. */}
+      <body suppressHydrationWarning>
         <script dangerouslySetInnerHTML={{ __html: boot }} />
         {children}
       </body>

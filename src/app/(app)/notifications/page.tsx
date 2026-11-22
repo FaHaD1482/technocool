@@ -1,5 +1,7 @@
 import { requireUser } from '@/lib/auth/session';
-import { listNotifications } from '@/lib/replies';
+import { countNotifications, listNotifications, unreadCount } from '@/lib/replies';
+import { Pager } from '@/components/ui/Pager';
+import { parsePage } from '@/lib/paging';
 import { Icon, type IconName } from '@/components/ui/Icon';
 import { fmtDateTime } from '@/lib/format';
 import { markAllRead, openNotification } from './actions';
@@ -11,10 +13,14 @@ const ICON: Record<string, IconName> = {
   message_received: 'inbox', message_sent: 'send', message_failed: 'alert',
 };
 
-export default async function NotificationsPage() {
+const SIZE = 30;
+
+export default async function NotificationsPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
   const u = await requireUser();
-  const items = await listNotifications(u.id);
-  const unread = items.filter((n) => !n.readAt).length;
+  const pg = parsePage((await searchParams).page, SIZE);
+  const [items, total, unread] = await Promise.all([
+    listNotifications(u.id, pg.size, pg.offset), countNotifications(u.id), unreadCount(u.id),
+  ]);
   return (
     <main className="wrap page page-narrow">
       <div className="pagehead">
@@ -22,7 +28,9 @@ export default async function NotificationsPage() {
         {unread > 0 && <form action={markAllRead}><button className="btn">Mark all read</button></form>}
       </div>
       {items.length === 0 ? (
-        <div className="card empty-state"><h2>Nothing yet</h2><p>Client replies to your BOQs and send results show up here.</p></div>
+        total > 0
+          ? <div className="card empty-state"><h2>That page is empty</h2><p>You have {total} notifications in all.</p></div>
+          : <div className="card empty-state"><h2>Nothing yet</h2><p>Client replies to your BOQs and send results show up here.</p></div>
       ) : (
         <div className="scroller notes">
           {items.map((n) => (
@@ -38,6 +46,7 @@ export default async function NotificationsPage() {
           ))}
         </div>
       )}
+      <Pager path="/notifications" params={{}} page={pg.page} size={pg.size} total={total} />
     </main>
   );
 }

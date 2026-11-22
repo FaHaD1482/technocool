@@ -81,11 +81,18 @@ export async function readReplyFile(u: SessionUser, replyId: string, n: number) 
 }
 
 // ---------------------------------------------------------------- unmatched (admin only)
-export async function unmatchedReplies(u: SessionUser): Promise<Reply[]> {
+export async function unmatchedReplies(u: SessionUser, limit = 25, offset = 0): Promise<Reply[]> {
   if (!can(u, 'mail.unmatched.manage')) throw new ApiError(403, 'Not allowed.');
   const { rows } = await query(`SELECT i.*, NULL::int AS revision, false AS unread FROM inbound_messages i
-                                 WHERE i.boq_id IS NULL AND i.thread_id IS NULL ORDER BY i.received_at DESC LIMIT 200`);
+                                 WHERE i.boq_id IS NULL AND i.thread_id IS NULL ORDER BY i.received_at DESC, i.id LIMIT $1 OFFSET $2`,
+  [Math.min(Math.max(limit, 1), 200), Math.max(0, offset)]);
   return rows.map(mapReply);
+}
+
+export async function countUnmatchedReplies(u: SessionUser): Promise<number> {
+  if (!can(u, 'mail.unmatched.manage')) throw new ApiError(403, 'Not allowed.');
+  const { rows } = await query(`SELECT count(*)::int AS n FROM inbound_messages WHERE boq_id IS NULL AND thread_id IS NULL`);
+  return rows[0].n;
 }
 
 /** Sent BOQs an unmatched reply can be assigned to (latest 300). */
@@ -139,8 +146,15 @@ export async function unreadCount(userId: string): Promise<number> {
   return rows[0].n;
 }
 
-export async function listNotifications(userId: string, limit = 100): Promise<NotificationItem[]> {
-  const { rows } = await query(`SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2`, [userId, limit]);
+export async function countNotifications(userId: string): Promise<number> {
+  const { rows } = await query(`SELECT count(*)::int AS n FROM notifications WHERE user_id = $1`, [userId]);
+  return rows[0].n;
+}
+
+export async function listNotifications(userId: string, limit = 100, offset = 0): Promise<NotificationItem[]> {
+  const { rows } = await query(
+    `SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC, id LIMIT $2 OFFSET $3`,
+    [userId, Math.min(Math.max(limit, 1), 200), Math.max(0, offset)]);
   return rows.map((r) => ({
     id: r.id, type: r.type, title: r.title, body: r.body, readAt: r.read_at?.toISOString() ?? null, createdAt: r.created_at.toISOString(),
     href: hrefFor(r),

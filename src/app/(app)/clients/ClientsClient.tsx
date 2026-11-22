@@ -15,7 +15,7 @@ export interface ClientRow {
   projects: number;
 }
 
-export function ClientsClient({ rows, canManage }: { rows: ClientRow[]; canManage: boolean }) {
+export function ClientsClient({ rows, canManage, emptyText = 'No clients yet.' }: { rows: ClientRow[]; canManage: boolean; emptyText?: string }) {
   const router = useRouter();
   const [editing, setEditing] = useState<ClientRow | null>(null);
   const [removing, setRemoving] = useState<ClientRow | null>(null);
@@ -36,7 +36,7 @@ export function ClientsClient({ rows, canManage }: { rows: ClientRow[]; canManag
         <table className="list">
           <thead><tr><th>Client</th><th>E-mail</th><th>Phone</th><th className="n">Projects</th>{canManage && <th className="n">Actions</th>}</tr></thead>
           <tbody>
-            {rows.length === 0 && <tr><td colSpan={canManage ? 5 : 4} className="empty-state">No clients yet.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={canManage ? 5 : 4} className="empty-state">{emptyText}</td></tr>}
             {rows.map((c) => (
               <tr key={c.id}>
                 <td><b>{c.name}</b>{c.contact_person && <span className="sub">{c.contact_person}</span>}</td>

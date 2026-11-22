@@ -96,6 +96,7 @@ What a collaborator gets and does not get:
 | `13_client_mail.sql` | Client e-mail on the thread tables, so a conversation can start without a BOQ |
 | `14_login_attempts.sql` | `login_attempts`: per-e-mail, per-IP and site-wide throttling |
 | `15_worker_heartbeat.sql` | `worker_status`: one row the Gmail page and `/api/health` read |
+| `16_scaling_indexes.sql` | `pg_trgm` search indexes and date / thread indexes behind the paginated lists |
 
 ## What is inside
 

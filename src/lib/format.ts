@@ -41,3 +41,26 @@ export function fmtTime(v: Dateish, fallback = '—'): string {
   const d = toDate(v);
   return d ? TIME.format(d) : fallback;
 }
+
+const DAY_KEY = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: TIME_ZONE });
+const MAIL_TIME = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone: TIME_ZONE });
+const MAIL_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: TIME_ZONE });
+const MAIL_OLD = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: TIME_ZONE });
+const MAIL_FULL = new Intl.DateTimeFormat('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: TIME_ZONE });
+
+/** Gmail-style list date: "3:45 PM" today, "Nov 9" this year, "9 Nov 2025" before that. */
+export function fmtMailDate(v: Dateish, now: Date = new Date()): string {
+  const d = toDate(v);
+  if (!d) return '';
+  const day = DAY_KEY.format(d);
+  const today = DAY_KEY.format(now);
+  if (day === today) return MAIL_TIME.format(d);
+  if (day.slice(0, 4) === today.slice(0, 4)) return MAIL_DAY.format(d);
+  return MAIL_OLD.format(d);
+}
+
+/** "Sat, Nov 21, 2026, 3:45 PM" — the full date on an opened message. */
+export function fmtMailFull(v: Dateish): string {
+  const d = toDate(v);
+  return d ? MAIL_FULL.format(d) : '';
+}

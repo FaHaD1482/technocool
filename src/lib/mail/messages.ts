@@ -5,6 +5,7 @@ import { ApiError } from '@/lib/api';
 import { can, type SessionUser } from '@/lib/auth/session';
 import { query, tx } from '@/lib/db';
 import { assertClientSafeFile } from '@/lib/excel/safety';
+import { likePattern } from '@/lib/paging';
 import { dailyUsage, getMailStatus } from './account';
 import { ALLOWED_LABEL, MAX_FILES, MAX_FILE_BYTES, attachmentDir, newMessageId, readStoredAttachment, storeAttachments, validateStored, type StoredAttachment, type UploadFile } from './attachments';
 import { messageIdFor, parseRecipients, plusAddress } from './compose';
@@ -160,17 +161,30 @@ export interface ThreadSummary {
   id: string; kind: 'general' | 'boq'; subject: string; clientId: string | null; clientName: string | null;
   clientEmail: string | null; boqId: string | null; boqNo: string | null; lastMessageAt: string;
   replies: number; unread: boolean;
+  /** For the Gmail-style list: start of the newest message, total messages, any attachment. */
+  snippet: string; messages: number; hasFiles: boolean; lastDirection: 'in' | 'out' | null;
 }
 
-export async function threadsForUser(
-  u: SessionUser,
-  opts: { filter?: 'all' | 'unread' | 'boq' | 'general'; q?: string; take?: number } = {},
-): Promise<ThreadSummary[]> {
-  // $1 is always the caller (used by the unread check), the visibility fragment may add $2.
+/** Collapses whitespace and quoted reply lines so the list preview reads like Gmail's one-line snippet. */
+function toSnippet(body: string | null): string {
+  if (!body) return '';
+  const lines = body.split(/\r?\n/);
+  const cut = lines.findIndex((l) => l.startsWith('>'));
+  const text = (cut > 0 ? lines.slice(0, cut) : lines).join(' ').replace(/\s+/g, ' ').trim();
+  // Gmail's quote header ("On Mon, Nov 9, 2026 at 3:00 PM … wrote:") can wrap over lines; cut at its start.
+  const quote = text.search(/\bOn \S.{0,200}? wrote:/);
+  return (quote > 0 ? text.slice(0, quote).trim() : text).slice(0, 160);
+}
+
+type ThreadFilter = 'all' | 'unread' | 'boq' | 'general';
+
+/** WHERE clause shared by the list and its count. $1 is always the caller (used by the unread check). */
+function threadWhere(u: SessionUser, opts: { filter?: ThreadFilter; q?: string }) {
   const params: unknown[] = [u.id];
   const v = threadVisibility(u, 't', 2);
   params.push(...v.params);
-  const where = [v.sql];
+  // `$1` must appear (and be typed) even when no clause needs the caller, e.g. an admin's unfiltered count.
+  const where = ['$1::uuid IS NOT NULL', v.sql];
   if (opts.filter === 'boq') where.push(`t.kind = 'boq'`);
   if (opts.filter === 'general') where.push(`t.kind = 'general'`);
   if (opts.filter === 'unread') {
@@ -178,24 +192,58 @@ export async function threadsForUser(
   }
   const q = (opts.q ?? '').trim().slice(0, 100);
   if (q) {
-    params.push(`%${q.replace(/[%_\\]/g, '\\$&')}%`);
+    params.push(likePattern(q));
     where.push(`(t.subject ILIKE $${params.length} OR c.name ILIKE $${params.length} OR c.email ILIKE $${params.length})`);
   }
-  const take = Math.min(Math.max(opts.take ?? 200, 1), 300);
+  return { params, sql: `FROM mail_threads t LEFT JOIN clients c ON c.id = t.client_id WHERE ${where.join(' AND ')}` };
+}
 
+/** How many conversations match (for "1–50 of 312"). */
+export async function countThreadsForUser(u: SessionUser, opts: { filter?: ThreadFilter; q?: string } = {}): Promise<number> {
+  const w = threadWhere(u, opts);
+  const { rows } = await query(`SELECT count(*)::int AS n ${w.sql}`, w.params);
+  return rows[0]?.n ?? 0;
+}
+
+export async function threadsForUser(
+  u: SessionUser,
+  opts: { filter?: ThreadFilter; q?: string; take?: number; offset?: number } = {},
+): Promise<ThreadSummary[]> {
+  const w = threadWhere(u, opts);
+  const params = w.params;
+  const take = Math.min(Math.max(opts.take ?? 50, 1), 300);
+  const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+
+  // Pick the page of ids first (index on last_message_at), then compute snippet / counts only for those rows.
   const { rows } = await query(
     `SELECT t.id, t.kind, t.subject, t.client_id, t.boq_id, t.boq_no, t.last_message_at,
             c.name AS client_name, c.email AS client_email,
             (SELECT count(*)::int FROM inbound_messages i WHERE i.thread_id = t.id) AS replies,
-            EXISTS (SELECT 1 FROM notifications n WHERE n.thread_id = t.id AND n.user_id = $1 AND n.read_at IS NULL AND n.type = 'message_received') AS unread
-     FROM mail_threads t LEFT JOIN clients c ON c.id = t.client_id
-     WHERE ${where.join(' AND ')}
-     ORDER BY t.last_message_at DESC LIMIT ${take}`, params);
+            EXISTS (SELECT 1 FROM notifications n WHERE n.thread_id = t.id AND n.user_id = $1 AND n.read_at IS NULL AND n.type = 'message_received') AS unread,
+            last.body_text AS last_body, last.dir AS last_dir,
+            ((SELECT count(*) FROM inbound_messages i WHERE i.thread_id = t.id)
+             + (SELECT count(*) FROM mail_messages m WHERE m.thread_id = t.id)
+             + (SELECT count(*) FROM boq_emails b WHERE b.thread_id = t.id))::int AS messages,
+            (EXISTS (SELECT 1 FROM inbound_messages i WHERE i.thread_id = t.id AND jsonb_array_length(coalesce(i.attachments, '[]'::jsonb)) > 0)
+             OR EXISTS (SELECT 1 FROM mail_messages m WHERE m.thread_id = t.id AND jsonb_array_length(coalesce(m.attachments, '[]'::jsonb)) > 0)
+             OR EXISTS (SELECT 1 FROM boq_emails b WHERE b.thread_id = t.id AND cardinality(b.export_ids) > 0)) AS has_files
+     FROM (SELECT t.id ${w.sql} ORDER BY t.last_message_at DESC, t.id LIMIT ${take} OFFSET ${offset}) pick
+     JOIN mail_threads t ON t.id = pick.id
+     LEFT JOIN clients c ON c.id = t.client_id
+     LEFT JOIN LATERAL (
+       SELECT x.body_text, x.dir FROM (
+         SELECT i.body_text, 'in' AS dir, i.received_at AS at FROM inbound_messages i WHERE i.thread_id = t.id
+         UNION ALL SELECT m.body_text, 'out', coalesce(m.sent_at, m.queued_at) FROM mail_messages m WHERE m.thread_id = t.id
+         UNION ALL SELECT b.body_text, 'out', coalesce(b.sent_at, b.queued_at) FROM boq_emails b WHERE b.thread_id = t.id
+       ) x ORDER BY x.at DESC NULLS LAST LIMIT 1
+     ) last ON true
+     ORDER BY t.last_message_at DESC, t.id`, params);
 
   return rows.map((r) => ({
     id: r.id, kind: r.kind, subject: r.subject, clientId: r.client_id, clientName: r.client_name,
     clientEmail: r.client_email, boqId: r.boq_id, boqNo: r.boq_no,
     lastMessageAt: (r.last_message_at as Date).toISOString(), replies: r.replies, unread: r.unread,
+    snippet: toSnippet(r.last_body), messages: r.messages, hasFiles: r.has_files, lastDirection: r.last_dir ?? null,
   }));
 }
 
@@ -260,8 +308,30 @@ export async function attachmentFor(u: SessionUser, messageId: string, n: number
   return { buf, filename: a.filename, mimeType: a.mimeType };
 }
 
-/** Clients the composer can pick from. */
-export async function clientOptions(): Promise<{ id: string; name: string; email: string | null }[]> {
-  const { rows } = await query(`SELECT id, name, email FROM clients WHERE deleted_at IS NULL ORDER BY lower(name)`);
+export interface ClientOption { id: string; name: string; email: string | null }
+
+/**
+ * Clients for a pick-list, searched as the user types (name, e-mail or contact). Capped, so a company with
+ * thousands of clients never ships them all to the browser. Names starting with the term come first.
+ */
+export async function searchClients(q: string, limit = 20): Promise<ClientOption[]> {
+  const term = q.trim().slice(0, 100);
+  const take = Math.min(Math.max(limit, 1), 50);
+  if (!term) {
+    const { rows } = await query(`SELECT id, name, email FROM clients WHERE deleted_at IS NULL ORDER BY lower(name), id LIMIT $1`, [take]);
+    return rows;
+  }
+  const { rows } = await query(
+    `SELECT id, name, email FROM clients
+     WHERE deleted_at IS NULL AND (name ILIKE $1 OR email ILIKE $1 OR contact_person ILIKE $1)
+     ORDER BY (lower(name) LIKE lower($2) || '%') DESC, lower(name), id LIMIT $3`,
+    [likePattern(term), term.replace(/[%_\\]/g, '\\$&'), take]);
   return rows;
+}
+
+/** One client for a pre-filled picker (e.g. "New message" from a client page). Null if removed. */
+export async function clientOption(id: string): Promise<ClientOption | null> {
+  if (!z.uuid().safeParse(id).success) return null;
+  const { rows } = await query(`SELECT id, name, email FROM clients WHERE id = $1 AND deleted_at IS NULL`, [id]);
+  return rows[0] ?? null;
 }
