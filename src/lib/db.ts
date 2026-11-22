@@ -15,8 +15,13 @@ export const pool =
   globalForPg.__pgPool ??
   new pg.Pool({
     connectionString,
-    max: 10,
+    // More users at once → raise DB_POOL_MAX (keep it under Postgres' max_connections minus the worker's).
+    max: Math.min(Math.max(Number(process.env.DB_POOL_MAX) || 10, 2), 100),
     idleTimeoutMillis: 30_000,
+    // Fail fast instead of piling up requests when every connection is busy.
+    connectionTimeoutMillis: 10_000,
+    // A runaway query is cancelled instead of holding a connection forever.
+    statement_timeout: Number(process.env.DB_STATEMENT_TIMEOUT_MS) || 30_000,
     application_name: 'hvac-boq-web',
   });
 if (process.env.NODE_ENV !== 'production') globalForPg.__pgPool = pool;

@@ -3,20 +3,29 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Icon } from '@/components/ui/Icon';
-import { FileField } from '@/components/ui/FileField';
 import { apiFetch, SessionExpired } from '@/lib/client-api';
-import { ATTACH_ACCEPT, ATTACH_HINT } from './ComposeForm';
+import { AttachButton, AttachChips } from './Attachments';
+import { Avatar } from './Avatar';
 
-/** Reply inside a conversation. It goes out in the same Gmail thread and returns to the same inbox. */
-export function ReplyBox({ threadId, clientId, to, subject, replyToInboundId }: {
-  threadId: string; clientId: string; to: string; subject: string; replyToInboundId?: string;
+/**
+ * Gmail's reply: a "Reply" button under the conversation that opens an inline reply card.
+ * It goes out in the same Gmail thread and the answer returns to this conversation.
+ */
+export function ReplyBox({ threadId, clientId, to, subject, replyToInboundId, me }: {
+  threadId: string; clientId: string; to: string; subject: string; replyToInboundId?: string; me: string;
 }) {
   const router = useRouter();
+  const [open, setOpen] = useState(false);
   const [body, setBody] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+
+  const discard = () => {
+    if ((body.trim() || files.length) && !window.confirm('Discard this reply?')) return;
+    setBody(''); setFiles([]); setErr(null); setOpen(false);
+  };
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
@@ -32,8 +41,8 @@ export function ReplyBox({ threadId, clientId, to, subject, replyToInboundId }: 
       for (const f of files) fd.append('files', f);
       const { res, body: b } = await apiFetch('/api/mail/messages', { method: 'POST', body: fd });
       if (!res.ok) { setErr(typeof b.error === 'string' ? b.error : 'Could not send the reply.'); return; }
-      setBody(''); setFiles([]);
-      setOk('Reply queued — it will appear here as soon as it is sent.');
+      setBody(''); setFiles([]); setOpen(false);
+      setOk('Message queued. It appears above as soon as it is sent.');
       router.refresh();
     } catch (e) {
       if (!(e instanceof SessionExpired)) setErr((e as Error).message);
@@ -42,18 +51,34 @@ export function ReplyBox({ threadId, clientId, to, subject, replyToInboundId }: 
     }
   }
 
-  return (
-    <form onSubmit={send} className="card stack">
-      <h2>Reply</h2>
-      <label className="f"><span className="lbl">Message</span>
-        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={6} maxLength={20000} required /></label>
-      <FileField label="Attachments" hint={ATTACH_HINT} accept={ATTACH_ACCEPT} files={files} onChange={setFiles} />
-      {err && <p className="ferr" role="alert">{err}</p>}
-      {ok && <p className="fok" role="status">{ok}</p>}
-      <div className="formactions">
-        <button className="btn primary" disabled={busy}>
-          <Icon name="reply" size={16} /> {busy ? 'Sending…' : 'Send reply'}
+  if (!open) {
+    return (
+      <div className="m-reply-actions">
+        {ok && <p className="fok" role="status">{ok}</p>}
+        <button type="button" className="m-pill" onClick={() => { setOk(null); setOpen(true); }}>
+          <Icon name="reply" size={18} /> Reply
         </button>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={send} className="m-reply">
+      <Avatar name={me} size={40} />
+      <div className="m-reply-card">
+        <div className="m-reply-to"><Icon name="reply" size={16} /> <span>{to}</span></div>
+        <textarea className="m-body" value={body} onChange={(e) => setBody(e.target.value)} maxLength={20000} required
+          autoFocus aria-label="Reply" placeholder="Write your reply…" />
+        <AttachChips files={files} onChange={setFiles} />
+        {err && <p className="ferr m-err" role="alert">{err}</p>}
+        <div className="m-toolbar">
+          <button className="m-send" disabled={busy}>{busy ? 'Sending…' : 'Send'} <Icon name="send" size={15} /></button>
+          <AttachButton files={files} onChange={setFiles} />
+          <span className="m-toolbar-note" />
+          <button type="button" className="m-icon m-discard" onClick={discard} disabled={busy} aria-label="Discard reply" title="Discard reply">
+            <Icon name="trash" size={18} />
+          </button>
+        </div>
       </div>
     </form>
   );

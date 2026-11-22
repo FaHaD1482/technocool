@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ReplyBox } from '@/components/inbox/ReplyBox';
 import { ThreadItems } from '@/components/inbox/ThreadItems';
+import { Icon } from '@/components/ui/Icon';
 import { MarkRead } from '@/components/ui/MarkRead';
 import { ApiError } from '@/lib/api';
 import { requirePermission } from '@/lib/auth/session';
@@ -27,33 +28,35 @@ export default async function ThreadPage({ params }: { params: Promise<{ threadI
   const { rows } = await query(`SELECT name, email FROM clients WHERE id = $1`, [thread.client_id]);
   const client = rows[0] as { name: string; email: string | null } | undefined;
   const lastInbound = [...items].reverse().find((i) => i.direction === 'in');
+  const clientName = client?.name ?? 'Unknown client';
 
   return (
-    <main className="wrap page page-narrow">
-      <div className="pagehead">
-        <div>
-          <Link href="/inbox" className="hint">← Inbox</Link>
-          <h1 style={{ fontSize: 24 }}>{thread.subject}</h1>
-          <p>
-            {client?.name ?? 'Unknown client'}{client?.email ? ` · ${client.email}` : ''} ·{' '}
-            {thread.kind === 'boq' ? `BOQ ${thread.boq_no ?? ''}` : 'Official mail'}
-          </p>
-        </div>
-        {thread.kind === 'boq' && thread.boq_id && <Link className="btn" href={`/boqs/${thread.boq_id}`}>Open BOQ</Link>}
+    <>
+      <div className="m-top m-thread-bar">
+        <Link className="m-icon" href="/inbox" aria-label="Back to Inbox" title="Back to Inbox"><Icon name="arrow-left" size={20} /></Link>
+        {thread.kind === 'boq' && thread.boq_id && (
+          <Link className="btn small" href={`/boqs/${thread.boq_id}`}><Icon name="boq" size={15} /> Open BOQ</Link>
+        )}
       </div>
 
-      <ThreadItems items={items} />
+      <div className="m-subject">
+        <h1>{thread.subject}</h1>
+        <span className={`m-label ${thread.kind}`}>{thread.kind === 'boq' ? (thread.boq_no ?? 'BOQ') : 'Official'}</span>
+        <span className="m-label plain">{clientName}</span>
+      </div>
 
-      <MarkRead threadId={thread.id} />
+      <ThreadItems items={items} clientName={clientName} clientEmail={client?.email ?? null} />
+
+      <MarkRead threadId={thread.id} refresh />
 
       {thread.client_id && client?.email ? (
         <ReplyBox
-          threadId={thread.id} clientId={thread.client_id} to={client.email}
+          threadId={thread.id} clientId={thread.client_id} to={client.email} me={u.fullName}
           subject={thread.subject} replyToInboundId={lastInbound?.id}
         />
       ) : (
-        <p className="alert warn" role="status">This conversation cannot be replied to: the client has no e-mail saved.</p>
+        <p className="alert warn m-pad" role="status">This conversation cannot be replied to: the client has no e-mail saved.</p>
       )}
-    </main>
+    </>
   );
 }

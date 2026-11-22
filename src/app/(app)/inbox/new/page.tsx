@@ -1,20 +1,20 @@
 import Link from 'next/link';
-import { ComposeForm } from '@/components/inbox/ComposeForm';
+import { ComposeForm, type ClientOption } from '@/components/inbox/ComposeForm';
+import { Icon } from '@/components/ui/Icon';
 import { requirePermission } from '@/lib/auth/session';
 import { getVisibleBoq } from '@/lib/boq/repo';
 import { query } from '@/lib/db';
-import { clientOptions } from '@/lib/mail/messages';
+import { clientOption } from '@/lib/mail/messages';
 
 export const metadata = { title: 'New message' };
 
 export default async function NewMessagePage({ searchParams }: { searchParams: Promise<{ client?: string; boq?: string }> }) {
   const u = await requirePermission('mail.send');
   const sp = await searchParams;
-  const all = await clientOptions();
 
-  let clients = all;
+  let client: ClientOption | null = null;
   let locked = false;
-  let initial = { clientId: '', to: '', subject: '', body: '' };
+  let initial = { to: '', subject: '', body: '' };
   let note: string | null = null;
 
   if (sp.boq) {
@@ -37,10 +37,9 @@ export default async function NewMessagePage({ searchParams }: { searchParams: P
       else if (!b.client_id) note = 'That BOQ has no client attached. Pick one below.';
       else if (b.client_deleted) note = 'That client was removed from the client list. Pick another client below.';
       else {
-        clients = [{ id: b.client_id, name: b.client_name, email: b.client_email }];
+        client = { id: b.client_id, name: b.client_name, email: b.client_email };
         locked = true;
         initial = {
-          clientId: b.client_id,
           to: b.client_email ?? '',
           subject: b.title ? `${b.boq_no} — ${b.title}` : `Regarding ${b.boq_no}`,
           body: '',
@@ -48,22 +47,20 @@ export default async function NewMessagePage({ searchParams }: { searchParams: P
       }
     }
   } else if (sp.client) {
-    const c = all.find((x) => x.id === sp.client);
-    if (c) initial = { clientId: c.id, to: c.email ?? '', subject: '', body: '' };
+    client = await clientOption(sp.client);
+    if (client) initial = { to: client.email ?? '', subject: '', body: '' };
     else note = 'That client was not found. Pick one below.';
   }
 
   return (
-    <main className="wrap page page-narrow">
-      <div className="pagehead">
-        <div>
-          <Link href="/inbox" className="hint">← Inbox</Link>
-          <h1>New message</h1>
-          <p>An official e-mail or a question to a client. It leaves from the company Gmail and the reply comes back to you.</p>
-        </div>
+    <>
+      <div className="m-top m-thread-bar">
+        <Link className="m-icon" href="/inbox" aria-label="Back to Inbox" title="Back to Inbox"><Icon name="arrow-left" size={20} /></Link>
       </div>
-      {note && <p className="alert warn" role="status">{note}</p>}
-      <ComposeForm clients={clients} initial={initial} lockedClient={locked} />
-    </main>
+      {note && <p className="alert warn m-pad" role="status">{note}</p>}
+      <div className="m-pad">
+        <ComposeForm client={client} initial={initial} lockedClient={locked} variant="page" />
+      </div>
+    </>
   );
 }

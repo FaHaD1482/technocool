@@ -2,19 +2,21 @@
 
 import Link from 'next/link';
 import { useActionState, useState } from 'react';
+import { ClientPicker } from '@/components/ui/ClientPicker';
 import { createBoq, type NewBoqState } from './actions';
 
 interface Props {
-  clients: { id: string; name: string; email: string | null }[];
+  /** Whether any client exists; the picker itself searches the server as you type. */
+  hasClients: boolean;
   brands: { id: number; name: string; fullName: string }[];
   canAddClient: boolean;
 }
 
-export function NewBoqForm({ clients, brands, canAddClient }: Props) {
+export function NewBoqForm({ hasClients, brands, canAddClient }: Props) {
   const [state, action, pending] = useActionState<NewBoqState, FormData>(createBoq, {});
   const f = state.fields ?? {};
   const [mode, setMode] = useState<'existing' | 'new'>(
-    (f.clientMode as 'existing' | 'new') ?? (clients.length || !canAddClient ? 'existing' : 'new'));
+    (f.clientMode as 'existing' | 'new') ?? (hasClients || !canAddClient ? 'existing' : 'new'));
 
   return (
     <form action={action} className="card stack" style={{ gap: 18, maxWidth: 760 }}>
@@ -22,19 +24,17 @@ export function NewBoqForm({ clients, brands, canAddClient }: Props) {
         <h2>1 · Client</h2>
         {canAddClient ? (
           <div className="choice" role="radiogroup" aria-label="Client">
-            <label><input type="radio" name="clientMode" value="existing" checked={mode === 'existing'} onChange={() => setMode('existing')} disabled={!clients.length} /> Existing client</label>
+            <label><input type="radio" name="clientMode" value="existing" checked={mode === 'existing'} onChange={() => setMode('existing')} disabled={!hasClients} /> Existing client</label>
             <label><input type="radio" name="clientMode" value="new" checked={mode === 'new'} onChange={() => setMode('new')} /> New client</label>
           </div>
         ) : (
           <input type="hidden" name="clientMode" value="existing" />
         )}
         {mode === 'existing' ? (
-          <label className="f"><span className="lbl">Client</span>
-            <select name="clientId" defaultValue={f.clientId ?? ''} required>
-              <option value="" disabled>Choose a client…</option>
-              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}{c.email ? ` · ${c.email}` : ''}</option>)}
-            </select>
-          </label>
+          <div className="f"><span className="lbl">Client <small>type to search</small></span>
+            {/* key: a failed submit re-mounts it with the chosen client restored by id. */}
+            <ClientPicker key={f.clientId ?? 'none'} name="clientId" initialId={f.clientId || undefined} required />
+          </div>
         ) : (
           <div className="formgrid">
             <label className="f full"><span className="lbl">Client / company name</span><input name="clientName" defaultValue={f.clientName} required /></label>

@@ -3,7 +3,7 @@
 import { randomBytes } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { hashPassword } from '@/lib/auth/password';
+import { hashPassword, passwordProblem } from '@/lib/auth/password';
 import { can, getCurrentUser } from '@/lib/auth/session';
 import { actionError } from '@/lib/action-error';
 import { tx } from '@/lib/db';
@@ -66,6 +66,42 @@ export async function resetPassword(userId: string): Promise<UserState> {
       await db.query(`UPDATE user_sessions SET revoked_at = now(), revoked_reason = 'password reset by admin' WHERE user_id = $1 AND revoked_at IS NULL`, [userId]);
     });
     return { ok: 'New one-time password (their other sessions were signed out):', password };
+  } catch (e) {
+    return { error: actionError(e) };
+  }
+}
+
+/**
+ * The admin types the new password themself (instead of a generated one-time password), e.g. to give an
+ * employee a password over the phone. Same strength rule as "My account". Other users are signed out
+ * everywhere; for the admin's own account only their other devices are.
+ */
+export async function setPassword(userId: string, password: string, confirm: string): Promise<UserState> {
+  try {
+    const u = await admin();
+    if (!z.uuid().safeParse(userId).success) return { error: 'Unknown user.' };
+    if (typeof password !== 'string' || typeof confirm !== 'string') return { error: 'Enter the new password twice.' };
+    if (password !== confirm) return { error: 'The two passwords do not match.' };
+    const problem = passwordProblem(password);
+    if (problem) return { error: problem };
+    const hash = await hashPassword(password);
+    const found = await tx(u.id, async (db) => {
+      const r = await db.query(
+        `UPDATE app_users SET password_hash = $2, failed_login_count = 0, locked_until = NULL WHERE id = $1 RETURNING full_name`,
+        [userId, hash]);
+      if (!r.rowCount) return null;
+      await db.query(
+        `UPDATE user_sessions SET revoked_at = now(), revoked_reason = 'password set by admin'
+         WHERE user_id = $1 AND revoked_at IS NULL AND ($1 <> $2 OR id <> $3)`, [userId, u.id, u.sessionId]);
+      return r.rows[0].full_name as string;
+    });
+    if (!found) return { error: 'Unknown user.' };
+    revalidatePath('/admin/users');
+    return {
+      ok: userId === u.id
+        ? 'Your password was changed. Your other devices were signed out.'
+        : `Password changed for ${found}. They were signed out and must use the new password.`,
+    };
   } catch (e) {
     return { error: actionError(e) };
   }

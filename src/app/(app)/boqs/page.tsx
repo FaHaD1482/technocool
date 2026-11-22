@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { Icon } from '@/components/ui/Icon';
+import { Pager } from '@/components/ui/Pager';
 import { can, requirePermission } from '@/lib/auth/session';
+import { likePattern, parsePage } from '@/lib/paging';
 import { visibleBoqs } from '@/lib/boq/repo';
 import { fmt } from '@/lib/calc';
 import { query } from '@/lib/db';
@@ -17,9 +19,10 @@ const FILTERS = [
   { v: 'all', label: 'All revisions' },
 ];
 
-export default async function BoqList({ searchParams }: { searchParams: Promise<{ q?: string; status?: string }> }) {
+export default async function BoqList({ searchParams }: { searchParams: Promise<{ q?: string; status?: string; page?: string }> }) {
   const u = await requirePermission('boq.view');
   const sp = await searchParams;
+  const pg = parsePage(sp.page);
   const q = (sp.q ?? '').trim().slice(0, 100);
   const status = FILTERS.some((f) => f.v === sp.status) ? sp.status! : 'open';
   const all = can(u, 'boq.view_all');
@@ -30,21 +33,29 @@ export default async function BoqList({ searchParams }: { searchParams: Promise<
   if (status === 'open') where.push(`b.status <> 'superseded'`);
   else if (status !== 'all') { params.push(status); where.push(`b.status = $${params.length}`); }
   if (q) {
-    params.push(`%${q.replace(/[%_\\]/g, '\\$&')}%`);
+    params.push(likePattern(q));
     const i = params.length;
     where.push(`(b.boq_no ILIKE $${i} OR p.name ILIKE $${i} OR c.name ILIKE $${i} OR b.title ILIKE $${i})`);
   }
-  const { rows } = await query(
-    `SELECT b.id, b.boq_no, b.revision, b.status, b.title, b.grand_total_bdt, b.updated_at, b.sent_at,
-            p.name AS project_name, c.name AS client_name, br.name AS brand, u.full_name AS owner_name
-     FROM boqs b
+  const from = `FROM boqs b
      JOIN projects p ON p.id = b.project_id
      LEFT JOIN clients c ON c.id = p.client_id
-     JOIN brands br ON br.id = b.selected_brand_id
-     LEFT JOIN app_users u ON u.id = b.owner_user_id
-     WHERE ${where.join(' AND ')}
-     ORDER BY b.updated_at DESC
-     LIMIT 300`, params);
+     WHERE ${where.join(' AND ')}`;
+  // The count and the page run side by side; the page only joins brand/owner for its 50 rows.
+  const [{ rows }, countRes] = await Promise.all([
+    query(
+      `SELECT b.id, b.boq_no, b.revision, b.status, b.title, b.grand_total_bdt, b.updated_at, b.sent_at,
+              p.name AS project_name, c.name AS client_name, br.name AS brand, u.full_name AS owner_name
+       FROM (SELECT b.id ${from} ORDER BY b.updated_at DESC, b.id LIMIT ${pg.size} OFFSET ${pg.offset}) pick
+       JOIN boqs b ON b.id = pick.id
+       JOIN projects p ON p.id = b.project_id
+       LEFT JOIN clients c ON c.id = p.client_id
+       JOIN brands br ON br.id = b.selected_brand_id
+       LEFT JOIN app_users u ON u.id = b.owner_user_id
+       ORDER BY b.updated_at DESC, b.id`, params),
+    query(`SELECT count(*)::int AS n ${from}`, params),
+  ]);
+  const total: number = countRes.rows[0]?.n ?? 0;
 
   const counts = await replyCounts(u, rows.map((r) => r.id));
 
@@ -77,7 +88,13 @@ export default async function BoqList({ searchParams }: { searchParams: Promise<
         </label>
       </form>
 
-      {rows.length === 0 ? (
+      {rows.length === 0 && total > 0 ? (
+        <div className="card empty-state">
+          <h2>That page is empty</h2>
+          <p>There are only {total} BOQs here.</p>
+          <Link className="btn" href={filterHref(status)}>Back to the first page</Link>
+        </div>
+      ) : rows.length === 0 ? (
         <div className="card empty-state">
           <h2>{q ? `Nothing matches “${q}”` : 'No BOQs yet'}</h2>
           <p>{q ? 'Try another search or filter.' : 'Create your first BOQ: pick a client and project, then add equipment and local items.'}</p>
@@ -108,6 +125,7 @@ export default async function BoqList({ searchParams }: { searchParams: Promise<
           </table>
         </div>
       )}
+      <Pager path="/boqs" params={{ status: status === 'open' ? undefined : status, q }} page={pg.page} size={pg.size} total={total} />
     </main>
   );
 }
